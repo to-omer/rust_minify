@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use proc_macro2::{Delimiter, Punct, Spacing, TokenStream, TokenTree};
 use quote::ToTokens;
 use std::collections::HashSet;
-use syn::parse_file;
+use syn::{parse_file, spanned::Spanned, Item};
 
 // Whitespace needed:
 //   1. between (Ident, Literal) and (Ident, Literal).
@@ -94,6 +94,39 @@ pub fn minify_token_stream(token_stream: TokenStream, buf: &mut String) {
             }
         }
     }
+}
+
+pub fn minify_selected<S>(content: &str, mut select: S) -> Result<String, syn::Error>
+where
+    S: FnMut(&Item) -> bool,
+{
+    let mut buf = String::with_capacity(content.len());
+    let mut is_newline = true;
+    let lines: Vec<&str> = content.split_inclusive('\n').collect();
+    for item in parse_file(content)?.items {
+        if select(&item) {
+            is_newline = false;
+            minify_token_stream(item.to_token_stream(), &mut buf);
+        } else {
+            if !is_newline {
+                buf.push('\n');
+                is_newline = true;
+            }
+            let span = item.span();
+            let start = span.start();
+            let end = span.end();
+            if start.line == end.line {
+                buf.push_str(&lines[start.line - 1][start.column..=end.column]);
+            } else {
+                buf.push_str(&lines[start.line - 1][start.column..]);
+                for line in start.line + 1..end.line.saturating_sub(1) {
+                    buf.push_str(&lines[line - 1]);
+                }
+                buf.push_str(&lines[end.line - 1][..=end.column]);
+            }
+        }
+    }
+    Ok(buf)
 }
 
 #[cfg(test)]

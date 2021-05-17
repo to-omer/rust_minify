@@ -8,7 +8,6 @@ edition = "2018"
 
 [dependencies]
 syn = { version = "1", features = ["full", "parsing"] }
-# syn = "1"
-proc-macro2 = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 once_cell = "1.7"
