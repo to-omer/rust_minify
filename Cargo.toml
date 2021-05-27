@@ -1,5 +1,5 @@
 [package]
-name = "minify-rust"
+name = "rust_minify"
 version = "0.1.0"
 authors = ["to-omer <toomerhs@gmail.com>"]
 edition = "2018"
