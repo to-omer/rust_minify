@@ -1,38 +1,35 @@
+pub mod attr;
 pub mod marker;
 
 use crate::marker::{LineColumn, SpanCollector};
+use attr::{is_minify_skip, ItemExt};
 use fxhash::FxHashSet;
 use marker::LinedSource;
 use once_cell::sync::Lazy;
 use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 use quote::ToTokens;
 use std::{iter::Peekable, ops::Range, str::FromStr};
-use syn::{parse2, spanned::Spanned, File, Item};
+use syn::{parse2, spanned::Spanned, File};
 
 pub fn minify(content: &str) -> Result<String, syn::Error> {
     let tokens = TokenStream::from_str(content)?;
     let mut sc = SpanCollector::new();
-    let space = if let Ok(file) = parse2::<File>(tokens.clone()) {
-        sc.collect(&file);
-        SpaceCollapsing::Syntax
-    } else {
-        SpaceCollapsing::Token
+    let file = match parse2::<File>(tokens.clone()) {
+        Ok(file) => file,
+        Err(_) => {
+            let mut state = State::new_with_capacity(
+                sc,
+                MinifyMode {
+                    space: SpaceCollapsing::Token,
+                },
+                content.len(),
+            );
+            state.step_tokens(tokens);
+            return Ok(state.buf);
+        }
     };
-    let mut state = State::new_with_capacity(sc, MinifyMode { space }, content.len());
-    state.step_tokens(tokens);
-    Ok(state.buf)
-}
-
-pub fn minify_selected<S>(content: &str, mut select: S) -> Result<String, syn::Error>
-where
-    S: FnMut(&Item) -> bool,
-{
-    let source = LinedSource::new(content);
-
-    let tokens = TokenStream::from_str(content)?;
-    let mut sc = SpanCollector::new();
-    let file = parse2::<File>(tokens.clone())?;
     sc.collect(&file);
+    let source = LinedSource::new(content);
     let mut state = State::new_with_capacity(
         sc,
         MinifyMode {
@@ -41,15 +38,9 @@ where
         content.len(),
     );
 
-    for attr in file.attrs {
-        state.step_tokens(attr.into_token_stream());
-    }
     let mut is_newline = state.buf.is_empty();
     for item in file.items {
-        if select(&item) {
-            is_newline = false;
-            state.step_tokens(item.into_token_stream());
-        } else {
+        if item.get_attributes().map_or(false, is_minify_skip) {
             if !is_newline {
                 state.buf.push('\n');
                 is_newline = true;
@@ -62,6 +53,10 @@ where
             let end: LineColumn = span.end().into();
             while let Some(_) = state.tokens.next_if(|r| r.end <= end) {}
             state.prev = PrevToken::None;
+        } else {
+            is_newline = false;
+            state.buf.push_str("#[cfg_attr(any(),rustfmt::skip)]");
+            state.step_tokens(item.into_token_stream());
         }
     }
     Ok(state.buf)
