@@ -2,7 +2,7 @@ pub mod attr;
 pub mod marker;
 
 use crate::marker::{LineColumn, SpanCollector};
-use attr::{is_minify_skip, ItemExt};
+use attr::{drain_minify_skip, is_minify_skip, ItemExt};
 use fxhash::FxHashSet;
 use marker::LinedSource;
 use once_cell::sync::Lazy;
@@ -12,6 +12,10 @@ use std::{iter::Peekable, ops::Range, str::FromStr};
 use syn::{parse2, spanned::Spanned, File};
 
 pub fn minify(content: &str) -> Result<String, syn::Error> {
+    minify_opt(content, false)
+}
+
+pub fn minify_opt(content: &str, remove_skip: bool) -> Result<String, syn::Error> {
     let tokens = TokenStream::from_str(content)?;
     let mut sc = SpanCollector::new();
     let file = match parse2::<File>(tokens.clone()) {
@@ -39,8 +43,13 @@ pub fn minify(content: &str) -> Result<String, syn::Error> {
     );
 
     let mut is_newline = state.buf.is_empty();
-    for item in file.items {
-        if item.get_attributes().map_or(false, is_minify_skip) {
+    for mut item in file.items {
+        let cond = if remove_skip {
+            item.get_attributes_mut().map_or(false, drain_minify_skip)
+        } else {
+            item.get_attributes().map_or(false, is_minify_skip)
+        };
+        if cond {
             if !is_newline {
                 state.buf.push('\n');
                 is_newline = true;
