@@ -1,8 +1,10 @@
 pub mod attr;
+pub mod fix;
 pub mod marker;
 
 use crate::marker::{LineColumn, SpanCollector};
 use attr::{drain_minify_skip, is_minify_skip, ItemExt};
+use fix::Visitor;
 use fxhash::FxHashSet;
 use marker::LinedSource;
 use once_cell::sync::Lazy;
@@ -64,6 +66,7 @@ pub fn minify_opt(content: &str, remove_skip: bool) -> Result<String, syn::Error
             state.prev = PrevToken::None;
         } else {
             is_newline = false;
+            Visitor::fix_item(&mut item);
             state.buf.push_str("#[cfg_attr(any(),rustfmt::skip)]");
             state.step_tokens(item.into_token_stream());
         }
