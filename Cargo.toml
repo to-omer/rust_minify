@@ -7,7 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-syn = { version = "1", features = ["full", "visit", "extra-traits"] }
+syn = { version = "1", features = ["full", "visit", "visit-mut", "extra-traits"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 once_cell = "1.7"

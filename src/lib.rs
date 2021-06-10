@@ -14,10 +14,10 @@ use std::{iter::Peekable, ops::Range, str::FromStr};
 use syn::{parse2, spanned::Spanned, File};
 
 pub fn minify(content: &str) -> Result<String, syn::Error> {
-    minify_opt(content, false)
+    minify_opt(content, &MinifyOption::default())
 }
 
-pub fn minify_opt(content: &str, remove_skip: bool) -> Result<String, syn::Error> {
+pub fn minify_opt(content: &str, option: &MinifyOption) -> Result<String, syn::Error> {
     let tokens = TokenStream::from_str(content)?;
     let mut sc = SpanCollector::new();
     let file = match parse2::<File>(tokens.clone()) {
@@ -46,7 +46,7 @@ pub fn minify_opt(content: &str, remove_skip: bool) -> Result<String, syn::Error
 
     let mut is_newline = state.buf.is_empty();
     for mut item in file.items {
-        let cond = if remove_skip {
+        let cond = if option.remove_skip {
             item.get_attributes_mut().map_or(false, drain_minify_skip)
         } else {
             item.get_attributes().map_or(false, is_minify_skip)
@@ -67,11 +67,28 @@ pub fn minify_opt(content: &str, remove_skip: bool) -> Result<String, syn::Error
         } else {
             is_newline = false;
             Visitor::fix_item(&mut item);
-            state.buf.push_str("#[cfg_attr(any(),rustfmt::skip)]");
+            if option.add_rustfmt_skip {
+                state.buf.push_str("#[cfg_attr(any(),rustfmt::skip)]");
+            }
             state.step_tokens(item.into_token_stream());
         }
     }
     Ok(state.buf)
+}
+
+#[derive(Debug, Clone)]
+pub struct MinifyOption {
+    pub remove_skip: bool,
+    pub add_rustfmt_skip: bool,
+}
+
+impl Default for MinifyOption {
+    fn default() -> Self {
+        Self {
+            remove_skip: false,
+            add_rustfmt_skip: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
