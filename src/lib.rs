@@ -62,7 +62,9 @@ pub fn minify_opt(content: &str, option: &MinifyOption) -> Result<String, syn::E
                 state.buf.push('\n');
             };
             let end: LineColumn = span.end().into();
-            while let Some(_) = state.tokens.next_if(|r| r.end <= end) {}
+            while state.tokens.peek().map_or(false, |r| r.end <= end) {
+                state.tokens.next();
+            }
             state.prev = PrevToken::None;
         } else {
             is_newline = false;
