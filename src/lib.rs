@@ -78,19 +78,10 @@ pub fn minify_opt(content: &str, option: &MinifyOption) -> Result<String, syn::E
     Ok(state.buf)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MinifyOption {
     pub remove_skip: bool,
     pub add_rustfmt_skip: bool,
-}
-
-impl Default for MinifyOption {
-    fn default() -> Self {
-        Self {
-            remove_skip: false,
-            add_rustfmt_skip: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -330,15 +321,15 @@ mod tests {
     #[test]
     fn test_punct_space() {
         // https://docs.rs/syn/1.0.72/src/syn/token.rs.html#707-754
-        const TOKENS: [&'static str; 46] = [
+        const TOKENS: [&str; 46] = [
             "+", "+=", "&", "&&", "&=", "@", "!", "^", "^=", ":", "::", ",", "/", "/=", "$", ".",
             "..", "...", "..=", "=", "==", ">=", ">", "<=", "<", "*=", "!=", "|", "|=", "||", "#",
             "?", "->", "<-", "%", "%=", "=>", ";", "<<", "<<=", ">>", ">>=", "*", "-", "-=", "~",
         ];
 
         let mut separated = vec![];
-        for t0 in TOKENS.iter().cloned() {
-            for t1 in TOKENS.iter().cloned() {
+        for t0 in TOKENS.iter() {
+            for t1 in TOKENS.iter() {
                 let mut t = t0.to_string();
                 t.push_str(t1);
                 if TOKENS.contains(&t.as_str()) {
@@ -346,7 +337,7 @@ mod tests {
                 }
             }
         }
-        separated.sort();
+        separated.sort_unstable();
         separated.dedup();
         assert_eq!(SEPARATED, &separated[..]);
     }
