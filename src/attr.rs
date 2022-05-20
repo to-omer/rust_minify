@@ -88,12 +88,12 @@ where
     let n = v.len();
     let mut del = 0usize;
     for i in 0..n {
-        if filter(&v[i]) {
-            del += 1;
-        } else if del > 0 {
-            unsafe {
-                let src: *const T = &v[i];
-                let dst: *mut T = &mut v[i - del];
+        unsafe {
+            if filter(v.get_unchecked(i)) {
+                del += 1;
+            } else if del > 0 {
+                let src = v.as_ptr().add(i);
+                let dst = v.as_mut_ptr().add(i - del);
                 std::ptr::copy_nonoverlapping(src, dst, 1);
             }
         }
