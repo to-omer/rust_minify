@@ -3,16 +3,23 @@ name = "rust_minify"
 version = "0.1.0"
 authors = ["to-omer <toomerhs@gmail.com>"]
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+license = "MIT OR Apache-2.0"
+description = "minify rust code"
+repository = "https://github.com/to-omer/rust_minify"
+documentation = "https://docs.rs/rust_minify"
 
 [dependencies]
-syn = { version = "1", features = ["full", "visit", "visit-mut", "extra-traits"] }
-proc-macro2 = { version = "1", features = ["span-locations"] }
-quote = "1"
-once_cell = "1.7"
 fxhash = "0.2.1"
+once_cell = "1.11.0"
+proc-macro2 = { version = "1.0.39", features = ["span-locations"] }
+quote = "1.0.18"
+syn = { version = "1.0.95", features = [
+    "full",
+    "visit",
+    "visit-mut",
+    "extra-traits",
+] }
 
 [dev-dependencies]
-indoc = "1.0"
-test-case = "1.1.0"
+indoc = "1.0.6"
+test-case = "2.1.0"
