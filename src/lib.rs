@@ -198,6 +198,7 @@ impl State {
     fn step_punct(&mut self, punct: Punct) {
         let needs_space = match &self.prev {
             PrevToken::IdentOrLiteral(true) if punct.as_char() == '.' => true,
+            PrevToken::IdentOrLiteral(_) if "#\"'".contains(punct.as_char()) => true,
             PrevToken::Punct(prev) if matches!(prev.spacing(), Spacing::Alone) => {
                 match self.mode.space {
                     SpaceCollapsing::Syntax => match (prev.as_char(), punct.as_char()) {
@@ -312,6 +313,22 @@ mod tests {
         "#),
         "fn total(a:Vec<usize>)->usize{let mut total=0usize;for a in a.iter().cloned(){total+=a;}total}";
         "total"
+    )]
+    #[test_case(
+        indoc!(r#"
+            struct X<'a>(&'a ());
+            impl<'a> X<'a> {
+                fn x(&'a self) -> impl 'a + Clone {
+                    match "a" {
+                        _ => {
+                            macro!( #a #b );
+                        }
+                    }
+                }
+            }
+        "#),
+        "struct X<'a>(&'a());impl<'a>X<'a>{fn x(&'a self)->impl 'a+Clone{match \"a\"{_=>{macro!(#a #b);}}}}";
+        "reserving syntax for rust 2021"
     )]
     fn test_minify(content: &str, expected: &str) -> Result<(), syn::Error> {
         assert_eq!(minify(content)?, expected);
