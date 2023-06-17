@@ -225,8 +225,10 @@ impl State {
         }
         let lit = literal.to_string();
         let last_is_dot = lit.chars().next_back().map_or(false, |c| c == '.');
+        let tuple_access = matches!(&self.prev, PrevToken::Punct(punct) if punct.as_char() == '.')
+            && lit.chars().next().map_or(false, |c| c.is_ascii_digit());
         self.buf.push_str(&lit);
-        self.prev = PrevToken::IdentOrLiteral(last_is_dot);
+        self.prev = PrevToken::IdentOrLiteral(last_is_dot | tuple_access);
     }
     fn switch_space_mode(&mut self, span: Span) {
         match self.mode.space {
@@ -313,6 +315,15 @@ mod tests {
         "#),
         "fn total(a:Vec<usize>)->usize{let mut total=0usize;for a in a.iter().cloned(){total+=a;}total}";
         "total"
+    )]
+    #[test_case(
+        indoc!(r#"
+            fn nested_tuple(t: ((i32,),)) -> i32 {
+                t . 0 . 0 * ( t . 0 ) . 0
+            }
+        "#),
+        "fn nested_tuple(t:((i32,),))->i32{t.0 .0*(t.0).0}";
+        "nested_tuple"
     )]
     #[test_case(
         indoc!(r#"
