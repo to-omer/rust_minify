@@ -13,19 +13,13 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v2
 
-    - name: Setup `stable-x86_64-unknown-linux-gnu`
-      uses: actions-rs/toolchain@v1
+    - name: Setup `stable`
+      uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: stable-x86_64-unknown-linux-gnu
-        default: true
-        profile: minimal
         components: rustfmt
 
     - name: cargo-fmt
-      uses: actions-rs/cargo@v1
-      with:
-        command: fmt
-        args: --all -- --check
+      run: cargo fmt --all -- --check
 
   build:
     strategy:
@@ -48,29 +42,18 @@ jobs:
       uses: actions/checkout@v2
 
     - name: Setup `${{ matrix.toolchain }}`
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ matrix.toolchain }}
-        default: true
-        profile: minimal
         components: clippy
 
     - name: cargo-clippy
-      uses: actions-rs/cargo@v1
-      with:
-        command: clippy
-        args: --workspace --lib --tests
+      run: cargo clippy --workspace --lib --tests
 
     - name: cargo-build
-      uses: actions-rs/cargo@v1
-      with:
-        command: build
-        args: --workspace --lib --tests
+      run: cargo build --workspace --lib --tests
 
     - name: cargo-test
-      uses: actions-rs/cargo@v1
-      with:
-        command: test
-        args: --workspace --no-fail-fast
+      run: cargo test --workspace --no-fail-fast
       env:
         RUST_BACKTRACE: full
