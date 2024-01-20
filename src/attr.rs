@@ -101,3 +101,27 @@ where
     v.truncate(n - del);
     del > 0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_case::test_case;
+
+    #[test_case("#[rust_minify::skip]mod a;", true; "rust_minify::skip")]
+    #[test_case("#[cfg_attr(true, rust_minify::skip)]mod a;", true; "cfg_attr(true, rust_minify::skip)")]
+    #[test_case("#[rustfmt::skip]mod a;", false; "rustfmt::skip")]
+    #[test_case("#[cfg_attr(true, rustfmt::skip)]mod a;", false; "cfg_attr(true, rustfmt::skip)")]
+    fn test_is_minify_skip(content: &str, expected: bool) {
+        let item = parse_str::<Item>(content).unwrap();
+        let attrs = item.get_attributes().unwrap();
+        assert_eq!(is_minify_skip(attrs), expected);
+    }
+
+    #[test]
+    fn test_any_drain_filter() {
+        let mut v = vec![1, 2, 3, 4, 5];
+        let result = any_drain_filter(&mut v, |x| *x % 2 == 0);
+        assert_eq!(result, true);
+        assert_eq!(v, vec![1, 3, 5]);
+    }
+}
