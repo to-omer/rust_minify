@@ -174,18 +174,15 @@ impl State {
     }
     fn step_group(&mut self, group: Group) {
         let (ldel, rdel) = match group.delimiter() {
-            Delimiter::Parenthesis => ('(', ')'),
-            Delimiter::Brace => ('{', '}'),
-            Delimiter::Bracket => ('[', ']'),
-            Delimiter::None => {
-                // HELP: What this?
-                (' ', ' ')
-            }
+            Delimiter::Parenthesis => ("(", ")"),
+            Delimiter::Brace => ("{", "}"),
+            Delimiter::Bracket => ("[", "]"),
+            Delimiter::None => ("", ""),
         };
-        self.buf.push(ldel);
+        self.buf.push_str(ldel);
         self.prev = PrevToken::None;
         self.step_tokens(group.stream());
-        self.buf.push(rdel);
+        self.buf.push_str(rdel);
         self.prev = PrevToken::None;
     }
     fn step_ident(&mut self, ident: Ident) {
@@ -348,11 +345,12 @@ mod tests {
 
     #[test]
     fn test_punct_space() {
-        // https://docs.rs/syn/1.0.72/src/syn/token.rs.html#707-754
+        // https://docs.rs/syn/latest/src/syn/token.rs.html#791-838
         const TOKENS: [&str; 46] = [
-            "+", "+=", "&", "&&", "&=", "@", "!", "^", "^=", ":", "::", ",", "/", "/=", "$", ".",
-            "..", "...", "..=", "=", "==", ">=", ">", "<=", "<", "*=", "!=", "|", "|=", "||", "#",
-            "?", "->", "<-", "%", "%=", "=>", ";", "<<", "<<=", ">>", ">>=", "*", "-", "-=", "~",
+            "&", "&&", "&=", "@", "^", "^=", ":", ",", "$", ".", "..", "...", "..=", "=", "==",
+            "=>", ">=", ">", "<-", "<=", "<", "-", "-=", "!=", "!", "|", "|=", "||", "::", "%",
+            "%=", "+", "+=", "#", "?", "->", ";", "<<", "<<=", ">>", ">>=", "/", "/=", "*", "*=",
+            "~",
         ];
 
         let mut separated = vec![];

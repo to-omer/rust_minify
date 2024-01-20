@@ -4,8 +4,7 @@ use std::{iter::once, ops::Range};
 use syn::{
     spanned::Spanned,
     visit::{self, Visit},
-    Attribute, BinOp, Expr, File, ForeignItem, ImplItem, Item, ItemMacro2, Macro, Pat, TraitItem,
-    Type,
+    BinOp, Expr, File, ForeignItem, ImplItem, Item, Macro, Pat, TraitItem, Type,
 };
 
 /// A line-column pair representing the start or end of a Span.
@@ -94,11 +93,6 @@ impl<'ast> Visit<'ast> for SpanCollector {
         }
         visit::visit_bin_op(self, node);
     }
-
-    fn visit_attribute(&mut self, node: &'ast Attribute) {
-        visit::visit_attribute(self, node);
-        self.visit_token_stream(&node.tokens);
-    }
     fn visit_expr(&mut self, node: &'ast Expr) {
         if let Expr::Verbatim(tokens) = node {
             self.visit_token_stream(tokens);
@@ -123,12 +117,12 @@ impl<'ast> Visit<'ast> for SpanCollector {
         }
         visit::visit_item(self, node);
     }
-    fn visit_item_macro2(&mut self, node: &'ast ItemMacro2) {
-        visit::visit_item_macro2(self, node);
-        self.visit_token_stream(&node.rules);
-    }
     fn visit_macro(&mut self, node: &'ast Macro) {
         visit::visit_macro(self, node);
+        self.visit_token_stream(&node.tokens);
+    }
+    fn visit_meta_list(&mut self, node: &'ast syn::MetaList) {
+        visit::visit_meta_list(self, node);
         self.visit_token_stream(&node.tokens);
     }
     fn visit_pat(&mut self, node: &'ast Pat) {
@@ -202,7 +196,7 @@ mod tests {
         assert_eq!(
             sc.tokens,
             vec![
-                LineColumn::new(1, 10)..LineColumn::new(1, 22),
+                LineColumn::new(1, 11)..LineColumn::new(1, 21),
                 LineColumn::new(7, 17)..LineColumn::new(7, 24)
             ]
         );

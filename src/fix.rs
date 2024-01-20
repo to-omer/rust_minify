@@ -2,9 +2,9 @@ use syn::{
     punctuated::Punctuated, visit_mut, visit_mut::VisitMut, AngleBracketedGenericArguments,
     BoundLifetimes, Constraint, DataEnum, ExprArray, ExprCall, ExprClosure, ExprMethodCall,
     ExprStruct, ExprTuple, FieldsNamed, FieldsUnnamed, Generics, Item, ItemEnum, ItemTrait,
-    ItemTraitAlias, LifetimeDef, MetaList, MethodTurbofish, ParenthesizedGenericArguments, PatOr,
-    PatSlice, PatStruct, PatTuple, PredicateLifetime, PredicateType, Signature, TraitItemType,
-    TypeBareFn, TypeImplTrait, TypeParam, TypeTraitObject, TypeTuple, UseGroup, WhereClause,
+    ItemTraitAlias, LifetimeParam, ParenthesizedGenericArguments, PatOr, PatSlice, PatStruct,
+    PatTuple, PredicateLifetime, PredicateType, Signature, TraitItemType, TypeBareFn,
+    TypeImplTrait, TypeParam, TypeTraitObject, TypeTuple, UseGroup, WhereClause,
 };
 
 pub fn remove_trailing_punct<T, P>(punctuated: &mut Punctuated<T, P>) {
@@ -111,19 +111,9 @@ impl VisitMut for Visitor {
         visit_mut::visit_item_trait_alias_mut(self, node);
     }
 
-    fn visit_lifetime_def_mut(&mut self, node: &mut LifetimeDef) {
+    fn visit_lifetime_param_mut(&mut self, node: &mut LifetimeParam) {
         remove_trailing_punct(&mut node.bounds);
-        visit_mut::visit_lifetime_def_mut(self, node);
-    }
-
-    fn visit_meta_list_mut(&mut self, node: &mut MetaList) {
-        remove_trailing_punct(&mut node.nested);
-        visit_mut::visit_meta_list_mut(self, node);
-    }
-
-    fn visit_method_turbofish_mut(&mut self, node: &mut MethodTurbofish) {
-        remove_trailing_punct(&mut node.args);
-        visit_mut::visit_method_turbofish_mut(self, node);
+        visit_mut::visit_lifetime_param_mut(self, node);
     }
 
     fn visit_parenthesized_generic_arguments_mut(
@@ -145,7 +135,7 @@ impl VisitMut for Visitor {
     }
 
     fn visit_pat_struct_mut(&mut self, node: &mut PatStruct) {
-        if node.dot2_token.is_none() {
+        if node.rest.is_none() {
             remove_trailing_punct(&mut node.fields);
         }
         visit_mut::visit_pat_struct_mut(self, node);
