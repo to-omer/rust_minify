@@ -112,7 +112,7 @@ mod tests {
     fn test_any_drain_filter() {
         let mut v = vec![1, 2, 3, 4, 5];
         let result = any_drain_filter(&mut v, |x| *x % 2 == 0);
-        assert_eq!(result, true);
+        assert!(result);
         assert_eq!(v, vec![1, 3, 5]);
     }
 }
