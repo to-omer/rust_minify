@@ -2,7 +2,7 @@
 name = "rust_minify"
 version = "0.1.2"
 authors = ["to-omer <toomerhs@gmail.com>"]
-edition = "2018"
+edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "minify rust code"
 repository = "https://github.com/to-omer/rust_minify"
@@ -10,10 +10,10 @@ documentation = "https://docs.rs/rust_minify"
 
 [dependencies]
 fxhash = "0.2.1"
-once_cell = "1.11.0"
+once_cell = "1.20.3"
 proc-macro2 = { version = "1.0.39", features = ["span-locations"] }
-quote = "1.0.18"
-syn = { version = "2.0.48", features = [
+quote = "1.0.35"
+syn = { version = "2.0.98", features = [
     "full",
     "visit",
     "visit-mut",
