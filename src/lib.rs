@@ -47,9 +47,9 @@ pub fn minify_opt(content: &str, option: &MinifyOption) -> Result<String, syn::E
     let mut is_newline = state.buf.is_empty();
     for mut item in file.items {
         let cond = if option.remove_skip {
-            item.get_attributes_mut().map_or(false, drain_minify_skip)
+            item.get_attributes_mut().is_some_and(drain_minify_skip)
         } else {
-            item.get_attributes().map_or(false, is_minify_skip)
+            item.get_attributes().is_some_and(is_minify_skip)
         };
         if cond {
             if !is_newline {
@@ -62,7 +62,7 @@ pub fn minify_opt(content: &str, option: &MinifyOption) -> Result<String, syn::E
                 state.buf.push('\n');
             };
             let end: LineColumn = span.end().into();
-            while state.tokens.peek().map_or(false, |r| r.end <= end) {
+            while state.tokens.peek().is_some_and(|r| r.end <= end) {
                 state.tokens.next();
             }
             state.prev = PrevToken::None;
@@ -222,9 +222,9 @@ impl State {
             self.buf.push(' ');
         }
         let lit = literal.to_string();
-        let last_is_dot = lit.chars().next_back().map_or(false, |c| c == '.');
+        let last_is_dot = lit.ends_with('.');
         let tuple_access = matches!(&self.prev, PrevToken::Punct(punct) if punct.as_char() == '.')
-            && lit.chars().next().map_or(false, |c| c.is_ascii_digit());
+            && lit.chars().next().is_some_and(|c| c.is_ascii_digit());
         self.buf.push_str(&lit);
         self.prev = PrevToken::IdentOrLiteral(last_is_dot | tuple_access);
     }
