@@ -200,6 +200,7 @@ impl State {
                 match self.mode.space {
                     SpaceCollapsing::Syntax => match (prev.as_char(), punct.as_char()) {
                         (':', ':') => true,
+                        ('|', '|') => true,
                         ('&', '&') => self.bitwise_and.contains(&prev.span().start().into()),
                         _ => false,
                     },
@@ -270,6 +271,11 @@ mod tests {
         "fn f() { let x: ::m::T = ::m::T::new() }",
         "fn f(){let x: ::m::T=::m::T::new()}";
         "isolated colon after colon"
+    )]
+    #[test_case(
+        "fn f() { 1 | |_| 1 }",
+        "fn f(){1| |_|1}";
+        "or after or"
     )]
     #[test_case(
         indoc!(r#"
