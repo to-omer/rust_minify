@@ -149,8 +149,9 @@ pub enum SpaceCollapsing {
     Token,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 enum PrevToken {
+    #[default]
     None,
     /// Ident or literal; whether a following dot needs a space.
     IdentOrLiteral(bool),
@@ -342,12 +343,6 @@ impl State {
         } else {
             SpaceCollapsing::Syntax
         };
-    }
-}
-
-impl Default for PrevToken {
-    fn default() -> Self {
-        Self::None
     }
 }
 
