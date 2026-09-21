@@ -282,7 +282,7 @@ impl State {
                     ('/', '/' | '*') | ('#', '#')
                 ) =>
             {
-                true
+                prev.as_char() != '#' || prev.spacing() == Spacing::Alone
             }
             PrevToken::Punct(prev) if matches!(prev.spacing(), Spacing::Alone) => {
                 match self.mode.space {
@@ -493,6 +493,16 @@ mod tests {
         "m!(/ /, / *, 1 . 2, 1 ., 1..2, # #, # \"ok\");",
         "m!(/ /,/ *,1 .2,1 .,1..2,# #,# \"ok\");";
         "macro token boundaries"
+    )]
+    #[test_case(
+        "m!(##, # #, ###, ## #, # ##);",
+        "m!(##,# #,###,## #,# ##);";
+        "hash spacing in macros"
+    )]
+    #[test_case(
+        "##, # #, ###, ## #, # ##",
+        "##,# #,###,## #,# ##";
+        "hash spacing in fallback"
     )]
     #[test_case(
         "m!(1..2,1..=2,1...2,1 . . 2,1 . 2,1 .,1. ..2.);",
