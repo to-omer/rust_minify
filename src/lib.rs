@@ -127,6 +127,7 @@ enum PrevToken {
     None,
     /// Ident or literal; whether a following dot needs a space.
     IdentOrLiteral(bool),
+    Number,
     Punct(Punct),
 }
 
@@ -176,16 +177,20 @@ impl State {
         }
     }
     pub fn step_tokens(&mut self, tokens: TokenStream) {
-        for tt in tokens {
-            self.step_token_tree(tt);
+        let mut tokens = tokens.into_iter().peekable();
+        while let Some(tt) = tokens.next() {
+            self.step_token_tree_with_next(tt, tokens.peek());
         }
     }
     pub fn step_token_tree(&mut self, tt: TokenTree) {
+        self.step_token_tree_with_next(tt, None);
+    }
+    fn step_token_tree_with_next(&mut self, tt: TokenTree, next: Option<&TokenTree>) {
         self.switch_space_mode(tt.span());
         match tt {
             TokenTree::Group(group) => self.step_group(group),
             TokenTree::Ident(ident) => self.step_ident(ident),
-            TokenTree::Punct(punct) => self.step_punct(punct),
+            TokenTree::Punct(punct) => self.step_punct(punct, next),
             TokenTree::Literal(literal) => self.step_literal(literal),
         }
     }
@@ -203,16 +208,24 @@ impl State {
         self.prev = PrevToken::None;
     }
     fn step_ident(&mut self, ident: Ident) {
-        if matches!(self.prev, PrevToken::IdentOrLiteral(_)) {
+        if matches!(self.prev, PrevToken::IdentOrLiteral(_) | PrevToken::Number) {
             self.buf.push(' ');
         }
         self.buf.push_str(&ident.to_string());
         self.prev = PrevToken::IdentOrLiteral(false);
     }
-    fn step_punct(&mut self, punct: Punct) {
+    fn step_punct(&mut self, punct: Punct, next: Option<&TokenTree>) {
         let needs_space = match &self.prev {
             PrevToken::IdentOrLiteral(true) if punct.as_char() == '.' => true,
-            PrevToken::IdentOrLiteral(_) if "#\"'".contains(punct.as_char()) => true,
+            PrevToken::Number if punct.as_char() == '.' => {
+                !(punct.spacing() == Spacing::Joint
+                    && matches!(next, Some(TokenTree::Punct(p)) if p.as_char() == '.'))
+            }
+            PrevToken::IdentOrLiteral(_) | PrevToken::Number
+                if "#\"'".contains(punct.as_char()) =>
+            {
+                true
+            }
             PrevToken::Punct(prev)
                 if matches!(
                     (prev.as_char(), punct.as_char()),
@@ -239,12 +252,12 @@ impl State {
         if needs_space {
             self.buf.push(' ');
         }
-        self.buf.push_str(&punct.to_string());
+        self.buf.push(punct.as_char());
         self.prev = PrevToken::Punct(punct);
     }
     fn step_literal(&mut self, literal: Literal) {
         let lit = literal.to_string();
-        if matches!(self.prev, PrevToken::IdentOrLiteral(_))
+        if matches!(self.prev, PrevToken::IdentOrLiteral(_) | PrevToken::Number)
             || matches!(&self.prev, PrevToken::Punct(p) if p.as_char() == '#' && lit.starts_with('"'))
         {
             self.buf.push(' ');
@@ -254,9 +267,13 @@ impl State {
         let tuple_access =
             matches!(&self.prev, PrevToken::Punct(punct) if punct.as_char() == '.') && number;
         self.buf.push_str(&lit);
-        self.prev = PrevToken::IdentOrLiteral(
-            last_is_dot || tuple_access || (number && self.mode.space != SpaceCollapsing::Syntax),
-        );
+        self.prev = if last_is_dot || tuple_access {
+            PrevToken::IdentOrLiteral(true)
+        } else if number && self.mode.space != SpaceCollapsing::Syntax {
+            PrevToken::Number
+        } else {
+            PrevToken::IdentOrLiteral(false)
+        };
     }
     fn switch_space_mode(&mut self, span: Span) {
         if self.mode.space == SpaceCollapsing::Token {
@@ -384,8 +401,18 @@ mod tests {
     )]
     #[test_case(
         "m!(/ /, / *, 1 . 2, 1 ., 1..2, # #, # \"ok\");",
-        "m!(/ /,/ *,1 .2,1 .,1 ..2,# #,# \"ok\");";
+        "m!(/ /,/ *,1 .2,1 .,1..2,# #,# \"ok\");";
         "macro token boundaries"
+    )]
+    #[test_case(
+        "m!(1..2,1..=2,1...2,1 . . 2,1 . 2,1 .,1. ..2.);",
+        "m!(1..2,1..=2,1...2,1 . .2,1 .2,1 .,1. ..2.);";
+        "numeric ranges and separate dots in macros"
+    )]
+    #[test_case(
+        "1..2,1..=2,1...2,1 . . 2,1 . 2,1 .,1. ..2.",
+        "1..2,1..=2,1...2,1 . .2,1 .2,1 .,1. ..2.";
+        "numeric ranges and separate dots in fallback"
     )]
     #[test_case(
         "/ / / * 1 . 2 # # # \"ok\"",

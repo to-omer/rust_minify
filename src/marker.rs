@@ -1,6 +1,6 @@
 use fxhash::FxHashSet;
 use proc_macro2::TokenStream;
-use std::{iter::once, ops::Range};
+use std::ops::Range;
 use syn::{
     spanned::Spanned,
     visit::{self, Visit},
@@ -35,32 +35,47 @@ impl From<proc_macro2::LineColumn> for LineColumn {
 #[derive(Debug, Clone)]
 pub struct LinedSource<'s> {
     content: &'s str,
+    // Character offsets of line starts, followed by the end of the source.
     lines: Vec<usize>,
+    // Character and byte offsets immediately after each multibyte character.
+    multibyte: Vec<(usize, usize)>,
 }
 impl<'s> LinedSource<'s> {
     pub fn new(content: &'s str) -> Self {
-        let lines = once(0)
-            .chain(
-                content
-                    .char_indices()
-                    .filter_map(|(i, c)| if c == '\n' { Some(i + 1) } else { None }),
-            )
-            .collect();
-        Self { content, lines }
+        let mut lines = vec![0];
+        let mut multibyte = Vec::new();
+        let mut len = 0;
+        for (byte, ch) in content.char_indices() {
+            len += 1;
+            if ch == '\n' {
+                lines.push(len);
+            }
+            if !ch.is_ascii() {
+                multibyte.push((len, byte + ch.len_utf8()));
+            }
+        }
+        lines.push(len);
+        Self {
+            content,
+            lines,
+            multibyte,
+        }
     }
     fn pos(&self, lc: &LineColumn) -> Option<usize> {
         assert_ne!(lc.line, 0, "LineColumn::line is 1-indexed but {}", lc.line);
         let start = *self.lines.get(lc.line - 1)?;
-        let end = self
-            .lines
-            .get(lc.line)
-            .copied()
-            .unwrap_or(self.content.len());
-        self.content[start..end]
-            .char_indices()
-            .map(|(offset, _)| start + offset)
-            .chain(once(end))
-            .nth(lc.column)
+        let end = *self.lines.get(lc.line)?;
+        if lc.column > end - start {
+            return None;
+        }
+        let position = start + lc.column;
+        let index = self
+            .multibyte
+            .partition_point(|&(chars, _)| chars <= position);
+        let extra = self.multibyte[..index]
+            .last()
+            .map_or(0, |&(chars, bytes)| bytes - chars);
+        Some(position + extra)
     }
     pub fn get(&self, range: &Range<LineColumn>) -> Option<&'s str> {
         match (self.pos(&range.start), self.pos(&range.end)) {
@@ -179,6 +194,35 @@ mod tests {
             assert_eq!(item, parse_str::<Item>(item_str)?);
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_lined_source_boundaries() {
+        let source = LinedSource::new("a日\r\n🦀b\n");
+        for (start, end, expected) in [
+            ((1, 0), (1, 1), Some("a")),
+            ((1, 1), (1, 2), Some("日")),
+            ((1, 2), (1, 4), Some("\r\n")),
+            ((2, 0), (2, 1), Some("🦀")),
+            ((2, 1), (2, 2), Some("b")),
+            ((1, 1), (2, 1), Some("日\r\n🦀")),
+            ((3, 0), (3, 0), Some("")),
+            ((2, 0), (2, 4), None),
+            ((4, 0), (4, 0), None),
+            ((1, usize::MAX), (1, usize::MAX), None),
+        ] {
+            let range = LineColumn::new(start.0, start.1)..LineColumn::new(end.0, end.1);
+            assert_eq!(source.get(&range), expected, "{range:?}");
+        }
+        let empty = LinedSource::new("");
+        assert_eq!(
+            empty.get(&(LineColumn::new(1, 0)..LineColumn::new(1, 0))),
+            Some("")
+        );
+        assert_eq!(
+            empty.get(&(LineColumn::new(2, 0)..LineColumn::new(2, 0))),
+            None
+        );
     }
 
     #[test]
