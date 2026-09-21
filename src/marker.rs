@@ -1,10 +1,12 @@
+use crate::attr::{is_minify_skip, ItemExt};
 use fxhash::FxHashSet;
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use std::ops::Range;
 use syn::{
     spanned::Spanned,
     visit::{self, Visit},
-    BinOp, Expr, File, ForeignItem, ImplItem, Item, Macro, Pat, TraitItem, Type,
+    Attribute, BinOp, Expr, File, ForeignItem, ImplItem, Item, Macro, Pat, StmtMacro, TraitItem,
+    Type,
 };
 
 /// A line-column pair representing the start or end of a Span.
@@ -82,6 +84,78 @@ impl<'s> LinedSource<'s> {
             (Some(start), Some(end)) => self.content.get(start..end),
             _ => None,
         }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct SkipCollector<'ast> {
+    pub items: Vec<(Span, &'ast [Attribute])>,
+}
+
+impl<'ast> SkipCollector<'ast> {
+    pub fn collect(file: &'ast File) -> Self {
+        let mut collector = Self::default();
+        collector.visit_file(file);
+        collector
+            .items
+            .sort_unstable_by_key(|(span, _)| span.start());
+        collector
+    }
+
+    fn mark(&mut self, node: &impl Spanned, attrs: &'ast [Attribute]) {
+        if is_minify_skip(attrs) {
+            self.items.push((node.span(), attrs));
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for SkipCollector<'ast> {
+    fn visit_stmt_macro(&mut self, node: &'ast StmtMacro) {
+        self.mark(node, &node.attrs);
+        visit::visit_stmt_macro(self, node);
+    }
+
+    fn visit_item(&mut self, node: &'ast Item) {
+        if let Some(attrs) = node.get_attributes() {
+            self.mark(node, attrs);
+        }
+        visit::visit_item(self, node);
+    }
+
+    fn visit_impl_item(&mut self, node: &'ast ImplItem) {
+        let attrs = match node {
+            ImplItem::Const(node) => &node.attrs,
+            ImplItem::Fn(node) => &node.attrs,
+            ImplItem::Type(node) => &node.attrs,
+            ImplItem::Macro(node) => &node.attrs,
+            _ => return,
+        };
+        self.mark(node, attrs);
+        visit::visit_impl_item(self, node);
+    }
+
+    fn visit_trait_item(&mut self, node: &'ast TraitItem) {
+        let attrs = match node {
+            TraitItem::Const(node) => &node.attrs,
+            TraitItem::Fn(node) => &node.attrs,
+            TraitItem::Type(node) => &node.attrs,
+            TraitItem::Macro(node) => &node.attrs,
+            _ => return,
+        };
+        self.mark(node, attrs);
+        visit::visit_trait_item(self, node);
+    }
+
+    fn visit_foreign_item(&mut self, node: &'ast ForeignItem) {
+        let attrs = match node {
+            ForeignItem::Fn(node) => &node.attrs,
+            ForeignItem::Static(node) => &node.attrs,
+            ForeignItem::Type(node) => &node.attrs,
+            ForeignItem::Macro(node) => &node.attrs,
+            _ => return,
+        };
+        self.mark(node, attrs);
+        visit::visit_foreign_item(self, node);
     }
 }
 

@@ -6,12 +6,12 @@ use crate::marker::{LineColumn, SpanCollector};
 use attr::{drain_minify_skip, is_minify_skip, ItemExt};
 use fix::Visitor;
 use fxhash::FxHashSet;
-use marker::LinedSource;
+use marker::{LinedSource, SkipCollector};
 use once_cell::sync::Lazy;
 use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 use quote::ToTokens;
 use std::{iter::Peekable, ops::Range, str::FromStr};
-use syn::{parse_file, spanned::Spanned};
+use syn::{parse_file, spanned::Spanned, File};
 
 pub fn minify(content: &str) -> Result<String, syn::Error> {
     minify_opt(content, &MinifyOption::default())
@@ -43,6 +43,9 @@ pub fn minify_opt(content: &str, option: &MinifyOption) -> Result<String, syn::E
         },
         content.len(),
     );
+    state.skipped = skipped_sources(&file, &source, option.remove_skip)?
+        .into_iter()
+        .peekable();
 
     if let Some(shebang) = file.shebang {
         state.buf.push_str(&shebang);
@@ -51,51 +54,12 @@ pub fn minify_opt(content: &str, option: &MinifyOption) -> Result<String, syn::E
     for attr in file.attrs {
         state.step_tokens(attr.into_token_stream());
     }
-    let mut is_newline = state.buf.is_empty() || state.buf.ends_with('\n');
     for mut item in file.items {
-        let cond = item.get_attributes().is_some_and(is_minify_skip);
-        if cond {
-            if !is_newline {
-                state.buf.push('\n');
-                is_newline = true;
-            }
-            let span = item.span();
-            let mut start = span.start().into();
-            if option.remove_skip {
-                for attr in std::mem::take(item.get_attributes_mut().unwrap()) {
-                    if is_minify_skip(std::slice::from_ref(&attr)) {
-                        let attr_span = attr.span();
-                        let prefix = source
-                            .get(&(start..attr_span.start().into()))
-                            .ok_or_else(|| syn::Error::new(attr_span, "invalid source span"))?;
-                        state.buf.push_str(prefix);
-                        let mut attrs = vec![attr];
-                        drain_minify_skip(&mut attrs);
-                        for attr in attrs {
-                            state.buf.push_str(&attr.into_token_stream().to_string());
-                        }
-                        start = attr_span.end().into();
-                    }
-                }
-            }
-            let s = source
-                .get(&(start..span.end().into()))
-                .ok_or_else(|| syn::Error::new(span, "invalid source span"))?;
-            state.buf.push_str(s);
-            state.buf.push('\n');
-            let end: LineColumn = span.end().into();
-            while state.tokens.peek().is_some_and(|r| r.end <= end) {
-                state.tokens.next();
-            }
-            state.prev = PrevToken::None;
-        } else {
-            is_newline = false;
-            Visitor::fix_item(&mut item);
-            if option.add_rustfmt_skip {
-                state.buf.push_str("#[cfg_attr(any(),rustfmt::skip)]");
-            }
-            state.step_tokens(item.into_token_stream());
+        if option.add_rustfmt_skip && !item.get_attributes().is_some_and(is_minify_skip) {
+            state.buf.push_str("#[cfg_attr(any(),rustfmt::skip)]");
         }
+        Visitor::fix_item(&mut item);
+        state.step_tokens(item.into_token_stream());
     }
     Ok(state.buf)
 }
@@ -112,7 +76,66 @@ pub struct State {
     buf: String,
     bitwise_and: FxHashSet<LineColumn>,
     tokens: Peekable<std::vec::IntoIter<Range<LineColumn>>>,
+    skipped: Peekable<std::vec::IntoIter<Skipped>>,
+    skip_until: Option<LineColumn>,
     mode: MinifyMode,
+}
+
+#[derive(Debug, Clone)]
+struct Skipped {
+    range: Range<LineColumn>,
+    source: String,
+}
+
+fn skipped_sources(
+    file: &File,
+    source: &LinedSource<'_>,
+    remove_skip: bool,
+) -> Result<Vec<Skipped>, syn::Error> {
+    let mut items = SkipCollector::collect(file).items.into_iter().peekable();
+    let mut skipped = Vec::new();
+    while let Some((span, attrs)) = items.next() {
+        let range = span.start().into()..span.end().into();
+        let mut attrs: Vec<_> = attrs.iter().collect();
+        // A skipped parent owns its source; nested markers still need removal.
+        while items
+            .peek()
+            .is_some_and(|(nested, _)| nested.end() <= span.end())
+        {
+            attrs.extend(items.next().unwrap().1);
+        }
+        let mut text = String::new();
+        let mut start = range.start;
+        if remove_skip {
+            attrs.sort_unstable_by_key(|attr| attr.span().start());
+            for attr in attrs {
+                if is_minify_skip(std::slice::from_ref(attr)) {
+                    let attr_span = attr.span();
+                    text.push_str(
+                        source
+                            .get(&(start..attr_span.start().into()))
+                            .ok_or_else(|| syn::Error::new(attr_span, "invalid source span"))?,
+                    );
+                    let mut retained = vec![attr.clone()];
+                    drain_minify_skip(&mut retained);
+                    for attr in retained {
+                        text.push_str(&attr.into_token_stream().to_string());
+                    }
+                    start = attr_span.end().into();
+                }
+            }
+        }
+        text.push_str(
+            source
+                .get(&(start..range.end))
+                .ok_or_else(|| syn::Error::new(span, "invalid source span"))?,
+        );
+        skipped.push(Skipped {
+            range,
+            source: text,
+        });
+    }
+    Ok(skipped)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +200,8 @@ impl State {
             buf: String::with_capacity(capacity),
             bitwise_and: collector.bitwise_and,
             tokens: collector.tokens.into_iter().peekable(),
+            skipped: Vec::new().into_iter().peekable(),
+            skip_until: None,
             mode,
         }
     }
@@ -190,6 +215,26 @@ impl State {
         self.step_token_tree_with_next(tt, None);
     }
     fn step_token_tree_with_next(&mut self, tt: TokenTree, next: Option<&TokenTree>) {
+        let start = tt.span().start().into();
+        if self.skip_until.is_some_and(|end| start < end) {
+            return;
+        }
+        self.skip_until = None;
+        if self
+            .skipped
+            .peek()
+            .is_some_and(|item| item.range.start == start)
+        {
+            let item = self.skipped.next().unwrap();
+            if !self.buf.is_empty() && !self.buf.ends_with('\n') {
+                self.buf.push('\n');
+            }
+            self.buf.push_str(&item.source);
+            self.buf.push('\n');
+            self.prev = PrevToken::None;
+            self.skip_until = Some(item.range.end);
+            return;
+        }
         self.switch_space_mode(tt.span());
         match tt {
             TokenTree::Group(group) => self.step_group(group),
@@ -518,6 +563,99 @@ mod tests {
             syn::parse_file(&format!("{expected}{body}"))?
         );
         assert!(output.ends_with(body));
+        Ok(())
+    }
+
+    #[test_case("mod m", "fn f() { let s =  \"日本語\"; }"; "module")]
+    #[test_case("impl S", "fn f() { let s =  \"日本語\"; }"; "impl method")]
+    #[test_case("impl S", "const N: [i32; 2] = [1,  2,];"; "associated constant")]
+    #[test_case("trait T", "fn f(x:  i32,);"; "trait method")]
+    #[test_case("unsafe extern \"C\"", "fn f(x:  i32,);"; "foreign function")]
+    #[test_case("fn outer()", "fn f() { let s =  \"日本語\"; }"; "local item")]
+    #[test_case("fn outer()", "m!( a  b );"; "local macro")]
+    fn test_nested_skip(container: &str, item: &str) -> Result<(), syn::Error> {
+        let attr = "#[cfg_attr(any(), rust_minify::skip)]";
+        let input = format!("{container} {{ {attr}{item} }} fn compact() {{ let x = 1; }}");
+        for remove_skip in [false, true] {
+            for add_rustfmt_skip in [false, true] {
+                let output = minify_opt(
+                    &input,
+                    &MinifyOption {
+                        remove_skip,
+                        add_rustfmt_skip,
+                    },
+                )?;
+                let attr = if remove_skip { "" } else { attr };
+                let rustfmt = if add_rustfmt_skip {
+                    "#[cfg_attr(any(),rustfmt::skip)]"
+                } else {
+                    ""
+                };
+                assert_eq!(
+                    output,
+                    format!(
+                        "{rustfmt}{container}{{\n{attr}{item}\n}}{rustfmt}fn compact(){{let x=1;}}"
+                    )
+                );
+                syn::parse_file(&output)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_skip_with_parent() -> Result<(), syn::Error> {
+        let attr = "#[cfg_attr(any(), rust_minify::skip)]";
+        let body = "mod m {\n    #[cfg_attr(all(), cfg(any()), rust_minify::skip)]\n    fn f() { let s =  \"日本語\"; }\n}";
+        let input = format!("{attr}{body} fn compact() {{}}");
+        assert_eq!(minify(&input)?, format!("{attr}{body}\nfn compact(){{}}"));
+        let output = minify_opt(
+            &input,
+            &MinifyOption {
+                remove_skip: true,
+                add_rustfmt_skip: true,
+            },
+        )?;
+        assert!(output.starts_with("mod m {\n    #"));
+        assert!(output.contains("\n    fn f() { let s =  \"日本語\"; }\n}"));
+        assert_eq!(syn::parse_file(&output)?, syn::parse_file("mod m { #[cfg_attr(all(), cfg(any()))] fn f() { let s = \"日本語\"; } } #[cfg_attr(any(),rustfmt::skip)] fn compact() {}")?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_skip_preserves_following_tokens() -> Result<(), syn::Error> {
+        let input = "mod m { mod n { m!(x); #[cfg_attr(any(),rust_minify::skip)]fn f() { let x =  1; } m!(> =); fn g(x: i32) -> bool { x < -1 } } }";
+        assert_eq!(minify(input)?, "mod m{mod n{m!(x);\n#[cfg_attr(any(),rust_minify::skip)]fn f() { let x =  1; }\nm!(> =);fn g(x:i32)->bool{x< -1}}}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_skip_with_doc_and_inner_attribute() -> Result<(), syn::Error> {
+        let input = "mod m { /// doc\nfn f() { #![cfg_attr(any(),rust_minify::skip)] let s =  \"日本語\"; } fn g() {} }";
+        assert_eq!(minify(input)?, "mod m{\n/// doc\nfn f() { #![cfg_attr(any(),rust_minify::skip)] let s =  \"日本語\"; }\nfn g(){}}");
+        let output = minify_opt(
+            input,
+            &MinifyOption {
+                remove_skip: true,
+                add_rustfmt_skip: false,
+            },
+        )?;
+        assert_eq!(
+            output,
+            "mod m{\n/// doc\nfn f() {  let s =  \"日本語\"; }\nfn g(){}}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_adjacent_nested_skips() -> Result<(), syn::Error> {
+        let first = "#[cfg_attr(any(),rust_minify::skip)]\r\nfn first() { // 日本語\r\n    let x = [1,  2,];\r\n}";
+        let second = "#[cfg_attr(any(),rust_minify::skip)]fn second() { let x =  2; }";
+        let input = format!("mod m {{ fn before() {{}} {first} {second} fn after() {{}} }}");
+        assert_eq!(
+            minify(&input)?,
+            format!("mod m{{fn before(){{}}\n{first}\n{second}\nfn after(){{}}}}")
+        );
         Ok(())
     }
 
