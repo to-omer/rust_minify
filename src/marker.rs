@@ -50,7 +50,17 @@ impl<'s> LinedSource<'s> {
     }
     fn pos(&self, lc: &LineColumn) -> Option<usize> {
         assert_ne!(lc.line, 0, "LineColumn::line is 1-indexed but {}", lc.line);
-        self.lines.get(lc.line - 1).map(|p| p + lc.column)
+        let start = *self.lines.get(lc.line - 1)?;
+        let end = self
+            .lines
+            .get(lc.line)
+            .copied()
+            .unwrap_or(self.content.len());
+        self.content[start..end]
+            .char_indices()
+            .map(|(offset, _)| start + offset)
+            .chain(once(end))
+            .nth(lc.column)
     }
     pub fn get(&self, range: &Range<LineColumn>) -> Option<&'s str> {
         match (self.pos(&range.start), self.pos(&range.end)) {
@@ -155,6 +165,7 @@ mod tests {
     #[test_case("fn main(){let x = true;println!(\"{}\",x);}"; "single line")]
     #[test_case("fn main(){\n\tlet x = true;\n\tprintln!(\"{}\",x);\n}"; "multiple line")]
     #[test_case("fn main(){\r\n\tlet x = true;\r\n\tprintln!(\"{}\",x);\r\n}"; "crlf")]
+    #[test_case("fn 日本語(){let s = \"é🦀\";} fn 次(){}"; "unicode")]
     fn test_lined_source(content: &str) -> Result<(), syn::Error> {
         let source = LinedSource::new(content);
         let file = parse_file(content)?;

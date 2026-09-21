@@ -44,23 +44,41 @@ pub fn minify_opt(content: &str, option: &MinifyOption) -> Result<String, syn::E
         content.len(),
     );
 
+    for attr in file.attrs {
+        state.step_tokens(attr.into_token_stream());
+    }
     let mut is_newline = state.buf.is_empty();
     for mut item in file.items {
-        let cond = if option.remove_skip {
-            item.get_attributes_mut().is_some_and(drain_minify_skip)
-        } else {
-            item.get_attributes().is_some_and(is_minify_skip)
-        };
+        let cond = item.get_attributes().is_some_and(is_minify_skip);
         if cond {
             if !is_newline {
                 state.buf.push('\n');
                 is_newline = true;
             }
             let span = item.span();
-            if let Some(s) = source.get(&(span.start().into()..span.end().into())) {
-                state.buf.push_str(s);
-                state.buf.push('\n');
-            };
+            let mut start = span.start().into();
+            if option.remove_skip {
+                for attr in std::mem::take(item.get_attributes_mut().unwrap()) {
+                    if is_minify_skip(std::slice::from_ref(&attr)) {
+                        let attr_span = attr.span();
+                        let prefix = source
+                            .get(&(start..attr_span.start().into()))
+                            .ok_or_else(|| syn::Error::new(attr_span, "invalid source span"))?;
+                        state.buf.push_str(prefix);
+                        let mut attrs = vec![attr];
+                        drain_minify_skip(&mut attrs);
+                        for attr in attrs {
+                            state.buf.push_str(&attr.into_token_stream().to_string());
+                        }
+                        start = attr_span.end().into();
+                    }
+                }
+            }
+            let s = source
+                .get(&(start..span.end().into()))
+                .ok_or_else(|| syn::Error::new(span, "invalid source span"))?;
+            state.buf.push_str(s);
+            state.buf.push('\n');
             let end: LineColumn = span.end().into();
             while state.tokens.peek().is_some_and(|r| r.end <= end) {
                 state.tokens.next();
@@ -107,7 +125,7 @@ pub enum SpaceCollapsing {
 #[derive(Debug, Clone)]
 enum PrevToken {
     None,
-    /// Ident or Lit, ends with `.`
+    /// Ident or literal; whether a following dot needs a space.
     IdentOrLiteral(bool),
     Punct(Punct),
 }
@@ -141,15 +159,14 @@ static MACHER: Lazy<FxHashSet<(char, char)>> = Lazy::new(|| SEPARATED.iter().clo
 
 impl State {
     pub fn new(collector: SpanCollector, mode: MinifyMode) -> Self {
-        Self {
-            prev: Default::default(),
-            buf: Default::default(),
-            bitwise_and: collector.bitwise_and,
-            tokens: collector.tokens.into_iter().peekable(),
-            mode,
-        }
+        Self::new_with_capacity(collector, mode, 0)
     }
-    pub fn new_with_capacity(collector: SpanCollector, mode: MinifyMode, capacity: usize) -> Self {
+    pub fn new_with_capacity(
+        mut collector: SpanCollector,
+        mode: MinifyMode,
+        capacity: usize,
+    ) -> Self {
+        collector.tokens.sort_unstable_by_key(|range| range.start);
         Self {
             prev: Default::default(),
             buf: String::with_capacity(capacity),
@@ -196,6 +213,14 @@ impl State {
         let needs_space = match &self.prev {
             PrevToken::IdentOrLiteral(true) if punct.as_char() == '.' => true,
             PrevToken::IdentOrLiteral(_) if "#\"'".contains(punct.as_char()) => true,
+            PrevToken::Punct(prev)
+                if matches!(
+                    (prev.as_char(), punct.as_char()),
+                    ('/', '/' | '*') | ('#', '#')
+                ) =>
+            {
+                true
+            }
             PrevToken::Punct(prev) if matches!(prev.spacing(), Spacing::Alone) => {
                 match self.mode.space {
                     SpaceCollapsing::Syntax => match (prev.as_char(), punct.as_char()) {
@@ -218,35 +243,38 @@ impl State {
         self.prev = PrevToken::Punct(punct);
     }
     fn step_literal(&mut self, literal: Literal) {
-        if matches!(self.prev, PrevToken::IdentOrLiteral(_)) {
+        let lit = literal.to_string();
+        if matches!(self.prev, PrevToken::IdentOrLiteral(_))
+            || matches!(&self.prev, PrevToken::Punct(p) if p.as_char() == '#' && lit.starts_with('"'))
+        {
             self.buf.push(' ');
         }
-        let lit = literal.to_string();
         let last_is_dot = lit.ends_with('.');
-        let tuple_access = matches!(&self.prev, PrevToken::Punct(punct) if punct.as_char() == '.')
-            && lit.chars().next().is_some_and(|c| c.is_ascii_digit());
+        let number = lit.chars().next().is_some_and(|c| c.is_ascii_digit());
+        let tuple_access =
+            matches!(&self.prev, PrevToken::Punct(punct) if punct.as_char() == '.') && number;
         self.buf.push_str(&lit);
-        self.prev = PrevToken::IdentOrLiteral(last_is_dot | tuple_access);
+        self.prev = PrevToken::IdentOrLiteral(
+            last_is_dot || tuple_access || (number && self.mode.space != SpaceCollapsing::Syntax),
+        );
     }
     fn switch_space_mode(&mut self, span: Span) {
-        match self.mode.space {
-            SpaceCollapsing::Syntax => {
-                if let Some(range) = self.tokens.peek() {
-                    if range.contains(&span.start().into()) {
-                        self.mode.space = SpaceCollapsing::Macro;
-                    }
-                }
-            }
-            SpaceCollapsing::Macro => {
-                if let Some(range) = self.tokens.peek() {
-                    if !range.contains(&span.start().into()) {
-                        self.mode.space = SpaceCollapsing::Syntax;
-                        self.tokens.next();
-                    }
-                }
-            }
-            SpaceCollapsing::Token => {}
+        if self.mode.space == SpaceCollapsing::Token {
+            return;
         }
+        let start = span.start().into();
+        while self.tokens.peek().is_some_and(|range| range.end <= start) {
+            self.tokens.next();
+        }
+        self.mode.space = if self
+            .tokens
+            .peek()
+            .is_some_and(|range| range.contains(&start))
+        {
+            SpaceCollapsing::Macro
+        } else {
+            SpaceCollapsing::Syntax
+        };
     }
 }
 
@@ -344,8 +372,80 @@ mod tests {
         "struct X<'a>(&'a());impl<'a>X<'a>{fn x(&'a self)->impl 'a+Clone{match \"a\"{_=>{macro!(#a #b);}}}}";
         "reserving syntax for rust 2021"
     )]
+    #[test_case(
+        "#![no_std] #![allow(dead_code)] fn f() {}",
+        "#![no_std]#![allow(dead_code)]fn f(){}";
+        "crate attributes"
+    )]
+    #[test_case(
+        "fn f() { let x = 6 / *&2; }",
+        "fn f(){let x=6/ *&2;}";
+        "division before dereference"
+    )]
+    #[test_case(
+        "m!(/ /, / *, 1 . 2, 1 ., 1..2, # #, # \"ok\");",
+        "m!(/ /,/ *,1 .2,1 .,1 ..2,# #,# \"ok\");";
+        "macro token boundaries"
+    )]
+    #[test_case(
+        "/ / / * 1 . 2 # # # \"ok\"",
+        "/ / / *1 .2 # # # \"ok\"";
+        "fallback token boundaries"
+    )]
+    #[test_case(
+        "fn f() -> m!(> =) { #![allow(unused)] 1 }",
+        "fn f()->m!(> =){#![allow(unused)]1}";
+        "inner attribute after signature macro"
+    )]
+    #[test_case(
+        "fn f() { m!(x) } #[cfg_attr(any(), rust_minify::skip)] fn g() {} m!(> =);",
+        "fn f(){m!(x)}\n#[cfg_attr(any(), rust_minify::skip)] fn g() {}\nm!(> =);";
+        "macro after skipped item"
+    )]
+    #[test_case(
+        "#[cfg_attr(any(), rust_minify::skip)]\nfn f() { let s = \"日本語\"; }",
+        "#[cfg_attr(any(), rust_minify::skip)]\nfn f() { let s = \"日本語\"; }\n";
+        "skipped unicode source"
+    )]
     fn test_minify(content: &str, expected: &str) -> Result<(), syn::Error> {
         assert_eq!(minify(content)?, expected);
+        Ok(())
+    }
+
+    #[test_case(
+        "#[cfg_attr(any(), rust_minify::skip)] #[allow(dead_code)]",
+        "#[allow(dead_code)]";
+        "skip before retained attribute"
+    )]
+    #[test_case(
+        "#[allow(dead_code)] #[rust_minify::skip]",
+        "#[allow(dead_code)]";
+        "skip after retained attribute"
+    )]
+    #[test_case(
+        "#[cfg_attr(all(), cfg(any()), rust_minify::skip)]",
+        "#[cfg_attr(all(), cfg(any()))]";
+        "retain cfg sibling"
+    )]
+    #[test_case(
+        "#[cfg_attr(all(), cfg_attr(any(), rust_minify::skip, allow(dead_code)))]",
+        "#[cfg_attr(all(), cfg_attr(any(), allow(dead_code)))]";
+        "retain nested cfg sibling"
+    )]
+    fn test_remove_skip(attrs: &str, expected: &str) -> Result<(), syn::Error> {
+        let body = "\nfn f() { let s =  \"日本語\"; }\n";
+        let output = minify_opt(
+            &format!("{attrs}{body}"),
+            &MinifyOption {
+                remove_skip: true,
+                add_rustfmt_skip: false,
+            },
+        )?;
+        assert_eq!(
+            syn::parse_file(&output)?,
+            syn::parse_file(&format!("{expected}{body}"))?
+        );
+        assert!(output.ends_with(body));
         Ok(())
     }
 

@@ -1,3 +1,4 @@
+use quote::ToTokens;
 use syn::{parse_str, punctuated::Punctuated, Attribute, Item, Meta, Path, Token};
 
 thread_local! {
@@ -20,7 +21,45 @@ pub fn is_minify_skip(attrs: &[Attribute]) -> bool {
 }
 
 pub fn drain_minify_skip(attrs: &mut Vec<Attribute>) -> bool {
-    any_drain_filter(attrs, |attr| is_minify_skip_meta(&attr.meta))
+    let mut removed = false;
+    attrs.retain_mut(|attr| retain_meta(&mut attr.meta, &mut removed));
+    removed
+}
+
+fn retain_meta(meta: &mut Meta, removed: &mut bool) -> bool {
+    match meta {
+        Meta::Path(path) if RUST_MINIFY_SKIP.with(|p| p == path) => {
+            *removed = true;
+            false
+        }
+        Meta::List(list) if list.path.is_ident("cfg_attr") => {
+            let Ok(args) = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            else {
+                return true;
+            };
+            let mut args = args.into_iter();
+            let Some(predicate) = args.next() else {
+                return true;
+            };
+            let mut nested_removed = false;
+            let mut retained = Punctuated::<Meta, Token![,]>::new();
+            retained.push(predicate);
+            for mut arg in args {
+                if retain_meta(&mut arg, &mut nested_removed) {
+                    retained.push(arg);
+                }
+            }
+            if nested_removed {
+                *removed = true;
+                if retained.len() == 1 {
+                    return false;
+                }
+                list.tokens = retained.into_token_stream();
+            }
+            true
+        }
+        _ => true,
+    }
 }
 
 pub trait ItemExt {
@@ -72,27 +111,6 @@ impl ItemExt for Item {
     }
 }
 
-fn any_drain_filter<T, F>(v: &mut Vec<T>, mut filter: F) -> bool
-where
-    F: FnMut(&T) -> bool,
-{
-    let n = v.len();
-    let mut del = 0usize;
-    for i in 0..n {
-        unsafe {
-            if filter(v.get_unchecked(i)) {
-                del += 1;
-            } else if del > 0 {
-                let src = v.as_ptr().add(i);
-                let dst = v.as_mut_ptr().add(i - del);
-                std::ptr::copy_nonoverlapping(src, dst, 1);
-            }
-        }
-    }
-    v.truncate(n - del);
-    del > 0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,11 +126,31 @@ mod tests {
         assert_eq!(is_minify_skip(attrs), expected);
     }
 
-    #[test]
-    fn test_any_drain_filter() {
-        let mut v = vec![1, 2, 3, 4, 5];
-        let result = any_drain_filter(&mut v, |x| *x % 2 == 0);
-        assert!(result);
-        assert_eq!(v, vec![1, 3, 5]);
+    #[test_case(
+        "#[rust_minify::skip] #[allow(dead_code)] fn f() {}",
+        "#[allow(dead_code)] fn f() {}"
+    )]
+    #[test_case(
+        "#[allow(dead_code)] #[rust_minify::skip] fn f() {}",
+        "#[allow(dead_code)] fn f() {}"
+    )]
+    #[test_case(
+        "#[cfg_attr(all(), cfg(any()), rust_minify::skip)] fn f() {}",
+        "#[cfg_attr(all(), cfg(any()))] fn f() {}"
+    )]
+    #[test_case(
+        "#[cfg_attr(all(), cfg_attr(any(), rust_minify::skip), allow(dead_code))] fn f() {}",
+        "#[cfg_attr(all(), allow(dead_code))] fn f() {}"
+    )]
+    #[test_case(
+        "#[cfg_attr(all(), cfg_attr(any(), rust_minify::skip, allow(dead_code)))] fn f() {}",
+        "#[cfg_attr(all(), cfg_attr(any(), allow(dead_code)))] fn f() {}"
+    )]
+    fn test_drain_minify_skip(content: &str, expected: &str) {
+        let mut item = parse_str::<Item>(content).unwrap();
+        let attrs = item.get_attributes_mut().unwrap();
+        assert!(drain_minify_skip(attrs));
+        assert!(!drain_minify_skip(attrs));
+        assert_eq!(item, parse_str::<Item>(expected).unwrap());
     }
 }
