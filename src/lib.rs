@@ -11,16 +11,16 @@ use once_cell::sync::Lazy;
 use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 use quote::ToTokens;
 use std::{iter::Peekable, ops::Range, str::FromStr};
-use syn::{parse2, spanned::Spanned, File};
+use syn::{parse_file, spanned::Spanned};
 
 pub fn minify(content: &str) -> Result<String, syn::Error> {
     minify_opt(content, &MinifyOption::default())
 }
 
 pub fn minify_opt(content: &str, option: &MinifyOption) -> Result<String, syn::Error> {
-    let tokens = TokenStream::from_str(content)?;
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let mut sc = SpanCollector::new();
-    let file = match parse2::<File>(tokens.clone()) {
+    let file = match parse_file(content) {
         Ok(file) => file,
         Err(_) => {
             let mut state = State::new_with_capacity(
@@ -30,7 +30,7 @@ pub fn minify_opt(content: &str, option: &MinifyOption) -> Result<String, syn::E
                 },
                 content.len(),
             );
-            state.step_tokens(tokens);
+            state.step_tokens(TokenStream::from_str(content)?);
             return Ok(state.buf);
         }
     };
@@ -44,10 +44,14 @@ pub fn minify_opt(content: &str, option: &MinifyOption) -> Result<String, syn::E
         content.len(),
     );
 
+    if let Some(shebang) = file.shebang {
+        state.buf.push_str(&shebang);
+        state.buf.push('\n');
+    }
     for attr in file.attrs {
         state.step_tokens(attr.into_token_stream());
     }
-    let mut is_newline = state.buf.is_empty();
+    let mut is_newline = state.buf.is_empty() || state.buf.ends_with('\n');
     for mut item in file.items {
         let cond = item.get_attributes().is_some_and(is_minify_skip);
         if cond {
@@ -237,6 +241,7 @@ impl State {
             PrevToken::Punct(prev) if matches!(prev.spacing(), Spacing::Alone) => {
                 match self.mode.space {
                     SpaceCollapsing::Syntax => match (prev.as_char(), punct.as_char()) {
+                        ('<', '-') => true,
                         (':', ':') => true,
                         ('|', '|') => true,
                         ('&', '&') => self.bitwise_and.contains(&prev.span().start().into()),
@@ -400,6 +405,41 @@ mod tests {
         "division before dereference"
     )]
     #[test_case(
+        "fn f(x: i32) -> bool { x < -1 }",
+        "fn f(x:i32)->bool{x< -1}";
+        "comparison with negative literal"
+    )]
+    #[test_case(
+        "fn f(x: i32) -> bool { x < - *&1 }",
+        "fn f(x:i32)->bool{x< -*&1}";
+        "comparison with negated expression"
+    )]
+    #[test_case(
+        "#!/usr/bin/env rust-script\nfn main() {}",
+        "#!/usr/bin/env rust-script\nfn main(){}";
+        "shebang"
+    )]
+    #[test_case(
+        "#!/path/it's-a-script\r\nfn main() {}",
+        "#!/path/it's-a-script\r\nfn main(){}";
+        "shebang with non rust tokens and crlf"
+    )]
+    #[test_case(
+        "#!/usr/bin/env rust-script",
+        "#!/usr/bin/env rust-script\n";
+        "shebang without trailing newline"
+    )]
+    #[test_case(
+        "#! /* comment */ [allow(dead_code)] fn f() {}",
+        "#![allow(dead_code)]fn f(){}";
+        "inner attribute is not a shebang"
+    )]
+    #[test_case(
+        "\u{feff}#!/usr/bin/env rust-script\n#[cfg_attr(any(),rust_minify::skip)] fn 日本語() {}",
+        "#!/usr/bin/env rust-script\n#[cfg_attr(any(),rust_minify::skip)] fn 日本語() {}\n";
+        "shebang and skipped unicode source"
+    )]
+    #[test_case(
         "m!(/ /, / *, 1 . 2, 1 ., 1..2, # #, # \"ok\");",
         "m!(/ /,/ *,1 .2,1 .,1..2,# #,# \"ok\");";
         "macro token boundaries"
@@ -448,6 +488,11 @@ mod tests {
         "#[allow(dead_code)] #[rust_minify::skip]",
         "#[allow(dead_code)]";
         "skip after retained attribute"
+    )]
+    #[test_case(
+        "#!/usr/bin/env rust-script\n#[rust_minify::skip] #[allow(dead_code)]",
+        "#!/usr/bin/env rust-script\n#[allow(dead_code)]";
+        "skip after shebang"
     )]
     #[test_case(
         "#[cfg_attr(all(), cfg(any()), rust_minify::skip)]",
