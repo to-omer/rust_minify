@@ -3,15 +3,14 @@ pub mod fix;
 pub mod marker;
 
 use crate::marker::{LineColumn, SpanCollector};
-use attr::{drain_minify_skip, is_minify_skip, ItemExt};
+use attr::{ItemExt, drain_minify_skip, is_minify_skip};
 use fix::Visitor;
-use fxhash::FxHashSet;
 use marker::{LinedSource, SkipCollector};
-use once_cell::sync::Lazy;
 use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 use quote::ToTokens;
-use std::{iter::Peekable, ops::Range, str::FromStr};
-use syn::{parse_file, spanned::Spanned, File};
+use rustc_hash::FxHashSet;
+use std::{iter::Peekable, ops::Range, str::FromStr, sync::LazyLock};
+use syn::{File, parse_file, spanned::Spanned};
 
 pub fn minify(content: &str) -> Result<String, syn::Error> {
     minify_opt(content, &MinifyOption::default())
@@ -184,7 +183,8 @@ const SEPARATED: [(char, char); 22] = [
     ('|', '|'),
 ];
 
-static MACHER: Lazy<FxHashSet<(char, char)>> = Lazy::new(|| SEPARATED.iter().cloned().collect());
+static MACHER: LazyLock<FxHashSet<(char, char)>> =
+    LazyLock::new(|| SEPARATED.iter().cloned().collect());
 
 impl State {
     pub fn new(collector: SpanCollector, mode: MinifyMode) -> Self {
@@ -391,6 +391,16 @@ mod tests {
         "ge in generics"
     )]
     #[test_case(
+        "type F = fn(i32,) -> i32;",
+        "type F=fn(i32)->i32;";
+        "function pointer trailing comma"
+    )]
+    #[test_case(
+        "type F = unsafe extern \"C\" fn(i32, ...);",
+        "type F=unsafe extern \"C\" fn(i32,...);";
+        "variadic function pointer comma"
+    )]
+    #[test_case(
         "macro_rules! f { ( $ x : ident ) => { let $x: Option<usize> = None; }; }",
         "macro_rules!f{($x:ident)=>{let$x:Option<usize> =None;};}";
         // optimal: "macro_rules!f{($x:ident)=>{let$x:Option<usize>=None;};}";
@@ -498,6 +508,16 @@ mod tests {
         "/ / / * 1 . 2 # # # \"ok\"",
         "/ / / *1 .2 # # # \"ok\"";
         "fallback token boundaries"
+    )]
+    #[test_case(
+        "const trait T<const N: usize> {} const fn f<A: [const] T<{m!(> =)}>>() {}",
+        "const trait T<const N:usize>{}const fn f<A:[const]T<{m!(> =)}>>(){}";
+        "macro tokens in const trait bound"
+    )]
+    #[test_case(
+        "const trait T<const N: usize> {} const fn f<A: const T<{2 & &2}>>() {}",
+        "const trait T<const N:usize>{}const fn f<A:const T<{2& &2}>>(){}";
+        "bitwise and in const trait bound"
     )]
     #[test_case(
         "fn f() -> m!(> =) { #![allow(unused)] 1 }",
@@ -613,21 +633,32 @@ mod tests {
         )?;
         assert!(output.starts_with("mod m {\n    #"));
         assert!(output.contains("\n    fn f() { let s =  \"日本語\"; }\n}"));
-        assert_eq!(syn::parse_file(&output)?, syn::parse_file("mod m { #[cfg_attr(all(), cfg(any()))] fn f() { let s = \"日本語\"; } } #[cfg_attr(any(),rustfmt::skip)] fn compact() {}")?);
+        assert_eq!(
+            syn::parse_file(&output)?,
+            syn::parse_file(
+                "mod m { #[cfg_attr(all(), cfg(any()))] fn f() { let s = \"日本語\"; } } #[cfg_attr(any(),rustfmt::skip)] fn compact() {}"
+            )?
+        );
         Ok(())
     }
 
     #[test]
     fn test_nested_skip_preserves_following_tokens() -> Result<(), syn::Error> {
         let input = "mod m { mod n { m!(x); #[cfg_attr(any(),rust_minify::skip)]fn f() { let x =  1; } m!(> =); fn g(x: i32) -> bool { x < -1 } } }";
-        assert_eq!(minify(input)?, "mod m{mod n{m!(x);\n#[cfg_attr(any(),rust_minify::skip)]fn f() { let x =  1; }\nm!(> =);fn g(x:i32)->bool{x< -1}}}");
+        assert_eq!(
+            minify(input)?,
+            "mod m{mod n{m!(x);\n#[cfg_attr(any(),rust_minify::skip)]fn f() { let x =  1; }\nm!(> =);fn g(x:i32)->bool{x< -1}}}"
+        );
         Ok(())
     }
 
     #[test]
     fn test_nested_skip_with_doc_and_inner_attribute() -> Result<(), syn::Error> {
         let input = "mod m { /// doc\nfn f() { #![cfg_attr(any(),rust_minify::skip)] let s =  \"日本語\"; } fn g() {} }";
-        assert_eq!(minify(input)?, "mod m{\n/// doc\nfn f() { #![cfg_attr(any(),rust_minify::skip)] let s =  \"日本語\"; }\nfn g(){}}");
+        assert_eq!(
+            minify(input)?,
+            "mod m{\n/// doc\nfn f() { #![cfg_attr(any(),rust_minify::skip)] let s =  \"日本語\"; }\nfn g(){}}"
+        );
         let output = minify_opt(
             input,
             &MinifyOption {

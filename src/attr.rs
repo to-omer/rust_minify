@@ -1,5 +1,5 @@
 use quote::ToTokens;
-use syn::{parse_str, punctuated::Punctuated, Attribute, Item, Meta, Path, Token};
+use syn::{Attribute, Item, Meta, Path, Token, parse_str, punctuated::Punctuated};
 
 thread_local! {
     static RUST_MINIFY_SKIP: Path = parse_str::<Path>("rust_minify::skip").unwrap();

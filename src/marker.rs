@@ -1,12 +1,12 @@
-use crate::attr::{is_minify_skip, ItemExt};
-use fxhash::FxHashSet;
+use crate::attr::{ItemExt, is_minify_skip};
 use proc_macro2::{Span, TokenStream};
+use rustc_hash::FxHashSet;
 use std::ops::Range;
 use syn::{
+    Attribute, BinOp, Expr, File, ForeignItem, ImplItem, Item, Macro, Pat, StmtMacro, TraitItem,
+    Type, TypeParamBound,
     spanned::Spanned,
     visit::{self, Visit},
-    Attribute, BinOp, Expr, File, ForeignItem, ImplItem, Item, Macro, Pat, StmtMacro, TraitItem,
-    Type,
 };
 
 /// A line-column pair representing the start or end of a Span.
@@ -241,6 +241,12 @@ impl<'ast> Visit<'ast> for SpanCollector {
             self.visit_token_stream(tokens);
         }
         visit::visit_type(self, node);
+    }
+    fn visit_type_param_bound(&mut self, node: &'ast TypeParamBound) {
+        if let TypeParamBound::Verbatim(tokens) = node {
+            self.visit_token_stream(tokens);
+        }
+        visit::visit_type_param_bound(self, node);
     }
 }
 
